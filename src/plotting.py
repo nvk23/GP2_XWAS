@@ -141,6 +141,81 @@ def miami_plot_with_PAR(
     return fig
 
 
+def manhattan_plot_with_PAR(
+    merged_nonpar,
+    merged_par,
+    title="chrX Manhattan Plot (PAR + non-PAR)",
+    genomewide=5e-8,
+    suggestive=1e-6,
+    nonpar_color="steelblue",
+    par_color="#4f77be",
+    point_size=6,
+    figsize=(12, 6),
+    annotate_top_n=0,
+):
+    # prep helper
+    def prep(df, color):
+        if df is None or len(df) == 0:
+            return pd.DataFrame(columns=["BP", "P", "neglog10p", "color", "SNP"])
+        out = df.copy()
+        out["neglog10p"] = -np.log10(out["P"].clip(lower=1e-300))
+        out["color"] = color
+        return out
+
+    merged_nonpar = prep(filter_chr(merged_nonpar, 23), nonpar_color)
+    merged_par = prep(filter_chr(merged_par, 25), par_color)
+    df = pd.concat([merged_nonpar, merged_par], ignore_index=True)
+
+    y_gw = -np.log10(genomewide) if genomewide else None
+    y_sug = -np.log10(suggestive) if suggestive else None
+
+    fig, ax = plt.subplots(figsize=figsize)
+    fig.suptitle(title, fontsize=16, y=0.98)
+
+    if len(df):
+        ax.scatter(df["BP"], df["neglog10p"], c=df["color"], s=point_size, linewidths=0, alpha=0.85)
+        if genomewide:
+            sig = df["P"] <= genomewide
+            if sig.any():
+                ax.scatter(df.loc[sig, "BP"], df.loc[sig, "neglog10p"],
+                           c="crimson", s=point_size + 4, linewidths=0, alpha=0.95)
+
+    if y_sug:
+        ax.axhline(y_sug, ls="--", lw=1, c="gray", alpha=0.8)
+    if y_gw:
+        ax.axhline(y_gw, ls="--", lw=1.2, c="gray", alpha=0.9)
+
+    ax.set_ylabel(r"$-\log_{10}(P)$")
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    ax.set_xlabel("Position (Mb)")
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{int(x/1e6)}"))
+
+    ymax = max((df["neglog10p"].max() if len(df) else 0), y_gw or 0, y_sug or 0) + 0.5
+    ax.set_ylim(0, max(1.0, ymax))
+
+    if annotate_top_n > 0 and len(df):
+        top = df.nsmallest(annotate_top_n, "P")
+        for _, r in top.iterrows():
+            ax.annotate(
+                r["SNP"],
+                xy=(r["BP"], r["neglog10p"]),
+                xytext=(0, 6),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color="dimgray",
+            )
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.4)
+    ax.set_facecolor("white")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    return fig
+
+
 def _optional_float(value: Optional[str]) -> Optional[float]:
     if value is None:
         return None
