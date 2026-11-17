@@ -463,16 +463,4 @@ if __name__ == "__main__" and "get_ipython" not in globals():
     if str(a["container"]).lower() == "none":
         a["container"] = None
     run_metal(**a)
-
-# Jupyter example (Biowulf, Apptainer): pull the image once, then run
-# sif = pull_container("/data/kuznetsovn2/containers/progwas-pipeline_1.0.0.sif")
-# res = run_metal(
-#     metal_input="/data/kuznetsovn2/gwas/*/*.glm.logistic.hybrid",
-#     metal_outdir="/data/kuznetsovn2/metal_results",
-#     metal_prefix="PD_META",
-#     metal_pheno_name=None,          # e.g. "PHENO1,PHENO2" for one run per phenotype
-#     marker_id="ID",                 # "chrpos" if IDs differ between cohorts
-#     container=sif,                  # or DEFAULT_CONTAINER with Docker
-#     # engine_bin="/path/to/apptainer",  # if apptainer isn't on the kernel's PATH
-# )
-# res["PD_META"]["results"].head()
+    
