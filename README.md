@@ -61,7 +61,7 @@ listed in `requirements_R.txt`.
 - `manhattan.R`: chrX Manhattan plot of the sex-combined results, with nearest-gene labels.
 - `miami.R`: the same, as a male vs female Miami plot.
 - `locusCompare_setAxes.R`: LocusCompare scatter plus per-sex LocusZoom panels for one locus.
-  Needs an [LDlink API token](https://ldlink.nih.gov/?tab=apiaccess) exported as `LDLINK_TOKEN`.
+  r^2 shading comes from the Ensembl REST LD endpoint, so it needs network access but no API token.
 
 `plots/ref/nearest_genes.csv` maps each labelled rsID to its nearest gene and whether the
 signal is novel or previously identified; edit it to add or correct an entry.
@@ -105,4 +105,4 @@ GP2_XWAS/
 |               METAL (random-metal build)              |      0.1.0     |        https://github.com/explodecomputer/random-metal        |        RRID:SCR_002013        |                Runs the meta-analysis in a GP2 container that builds the random-metal GitHub fork. This repo adds random-effects modeling to the fixed-effects analysis in standalone METAL (https://csg.sph.umich.edu/abecasis/metal/) |
 |               LocusZoom              |      -     |        https://my.locuszoom.org/        |        RRID:SCR_021374        |                Web service used for regional association plots and provides annotated exports with rsIDs for GWAS results                |
 |               GCTA-COJO              |      1.94.3     |        https://yanglab.westlake.edu.cn/software/gcta/        |        -        |                Used for conditional and joint analysis of PAR region                |
-|               LDlink              |      -     |        https://ldlink.nih.gov/        |        -        |                Queried by plots/locusCompare_setAxes.R through the LDlinkR package for r^2 proxies around the lead variant; needs a free API token exported as LDLINK_TOKEN. Its 1000 Genomes panel is autosome-only, so the script falls back to the Ensembl REST LD endpoint for chrX                |
+|               Ensembl REST API (LD endpoint)              |      REST 15.12; data release 116     |        https://rest.ensembl.org/documentation/info/ld_id_get        |        RRID:SCR_002344        |                Supplies the r^2 shading via /ld/human/:rsid/1000GENOMES:phase_3:EUR. Used because LDlink's 1000 Genomes panel is autosome-only and returns nothing for chrX                |

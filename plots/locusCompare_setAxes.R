@@ -3,11 +3,6 @@ library(data.table)
 library(ggplot2)
 library(cowplot)
 library(ggrepel)
-library(LDlinkR)
-
-# free token: https://ldlink.nih.gov/?tab=apiaccess
-# Export it in your shell before running, e.g. export LDLINK_TOKEN='your-token'
-ldlink_token <- Sys.getenv("LDLINK_TOKEN")
 
 # To run, from the repository root: Rscript plots/locusCompare_setAxes.R
 
@@ -65,41 +60,9 @@ get_position <- function(x, genome = c("hg19","hg38")) {
   merge(x, pos_lookup, by = "rsid")
 }
 
-# LD sources. LDlink's 1000G panel is autosome-only, so any chrX lead SNP comes
-# back as "not in 1000G reference panel"; Ensembl REST does cover chrX, with a
-# 500 kb max window (so +/-250 kb, narrower than `window`). Each returns NULL
-# rather than stopping, so the next source gets a turn.
-ld_from_ldlink <- function(snp, population) {
-  if (!nzchar(ldlink_token)) {
-    warning("No LDlink token. Get one at https://ldlink.nih.gov/?tab=apiaccess and export LDLINK_TOKEN=...")
-    return(NULL)
-  }
-  # NIH serves the idp.nih.gov certificate on ldlink.nih.gov, so the hostname
-  # check fails. Skip that check only; ssl_verifypeer stays on, so the chain is
-  # still validated against a trusted CA.
-  res <- try(httr::with_config(
-    httr::config(ssl_verifyhost = 0),
-    LDlinkR::LDproxy(
-      snp          = snp,
-      pop          = population,
-      r2d          = "r2",
-      token        = ldlink_token,
-      genome_build = "grch38",
-      win_size     = window
-    )
-  ), silent = TRUE)
-
-  if (inherits(res, "try-error") || !"RS_Number" %in% colnames(res)) return(NULL)
-  res <- res[res$RS_Number != "." & !is.na(res$R2), ]
-  if (nrow(res) == 0) return(NULL)
-  data.frame(
-    SNP_A = snp,
-    SNP_B = as.character(res$RS_Number),
-    R2    = as.numeric(res$R2),
-    stringsAsFactors = FALSE
-  )
-}
-
+# LD source. Ensembl REST covers chrX (1000 Genomes phase 3), with a 500 kb max
+# window (so +/-250 kb, narrower than `window`). Returns NULL rather than stopping,
+# so a missing lookup just drops the r^2 shading instead of killing the run.
 ld_from_ensembl <- function(snp, population) {
   res <- try(httr::GET(
     sprintf("https://rest.ensembl.org/ld/human/%s/1000GENOMES:phase_3:%s?window_size=500",
@@ -119,14 +82,10 @@ ld_from_ensembl <- function(snp, population) {
 }
 
 retrieve_LD <- function(chr, snp, population, anchor = snp) {
-  ld <- ld_from_ldlink(anchor, population)
+  ld <- ld_from_ensembl(anchor, population)
 
   if (is.null(ld)) {
-    message(sprintf("No LDlink LD for %s (its panel is autosome-only); trying Ensembl.", anchor))
-    ld <- ld_from_ensembl(anchor, population)
-  }
-  if (is.null(ld)) {
-    warning(sprintf("No LD for %s from LDlink or Ensembl; drawing the plot without r^2 shading.", anchor))
+    warning(sprintf("No Ensembl LD for %s; drawing the plot without r^2 shading.", anchor))
     ld <- data.frame(SNP_A = character(), SNP_B = character(), R2 = numeric(),
                      stringsAsFactors = FALSE)
   }
