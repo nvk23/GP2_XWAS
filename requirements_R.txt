@@ -1,0 +1,19 @@
+# R packages required by the figure scripts in plots/
+#
+# Install the CRAN packages listed below with:
+#   Rscript -e 'install.packages(grep("^[^#]", readLines("requirements_R.txt"), value = TRUE))'
+#
+# locuscomparer is not on CRAN -- install it from GitHub separately, after the
+# packages above (remotes is in that list):
+#   Rscript -e 'remotes::install_github("boxiangliu/locuscomparer")'
+
+cowplot
+data.table
+ggplot2
+ggrepel
+httr
+jsonlite
+LDlinkR
+remotes
+reshape2
+tidyverse

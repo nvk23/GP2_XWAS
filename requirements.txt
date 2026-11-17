@@ -1,5 +1,10 @@
+adjustText
+gwaslab
+jupyterlab
 matplotlib
+numpy
 pandas
-plotly
+pyarrow
 qmplot
+scipy>=1.11
 the-real-genotools

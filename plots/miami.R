@@ -1,0 +1,334 @@
+# make a miami plot (male vs female) for the X chromosome
+#
+# Set REGION_SET below to switch between the two analyses:
+#   "non_PAR" -> non-PAR region of chrX (single region)
+#   "PAR"     -> PAR1 + PAR2 combined side by side in one plot
+
+if (!require(tidyverse)) install.packages('tidyverse')
+if (!require(data.table)) install.packages('data.table')
+if (!require(reshape2)) install.packages('reshape2')
+if (!require(ggrepel)) install.packages('ggrepel')
+
+library(tidyverse)
+library(data.table)
+library(reshape2)
+library(ggrepel)
+
+### --- CONFIG ---
+REGION_SET <- "non_PAR"          # "non_PAR" or "PAR"
+
+### Working directory. Everything below is relative to it, so this is the only
+### path that changes between machines.
+wd        <- "/YOUR/WORKING/DIR"
+
+base_dir  <- file.path(wd, "X_Chrom/locuszoom/filtered")
+fig_dir   <- file.path(wd, "X_Chrom/locuszoom/figures")
+out_dir   <- file.path(fig_dir, REGION_SET)
+
+### Nearest-gene key. Relative to the repository root, so run this script from
+### there; set an absolute path if you keep the key somewhere else.
+gene_key_file <- "plots/ref/nearest_genes.csv"
+
+### Minimum -log10(P) kept for plotting. 0 keeps every variant (these are
+### single-chromosome files, so this is cheap). Use 3.114074 to thin the cloud.
+log10P_floor <- 0
+
+### Blank band between the male and female halves, as a fraction of the taller
+### half. 0 puts the two halves back to back; raise it to open a gap.
+y_gap_frac <- 0
+
+### Blank band between adjacent regions on the x axis, as a fraction of the
+### total plotted width. Separates PAR1 from PAR2; ignored for non-PAR, which
+### has only one region. 0 butts the regions together.
+x_gap_frac <- 0.03
+
+### Window (bp) used to pick one lead variant per locus for labelling.
+### 5e5 keeps DHRSX and XG in PAR1 apart (they sit 552 kb from each other).
+hit_window <- 5e5
+
+### --- READ INPUT FILES ---
+### Each read_gwas() call returns CHR / BP / SNP / P plus a REGION label that
+### replaces CHR as the grouping variable along the x axis.
+read_gwas <- function(path, region){
+  g <- fread(path)
+  data.table(
+    CHR    = g$CHR,
+    BP     = as.numeric(g$POS),
+    SNP    = g$rsid,
+    P      = as.numeric(g$Pvalue),
+    REGION = region
+  )
+}
+
+if (REGION_SET == "non_PAR") {
+
+  in_dir <- file.path(base_dir, "non_PAR/MAF_0.01")
+  gwas_m <- read_gwas(file.path(in_dir, "GP2_FIGS_EUR_AJ_non_PAR_male_filtered.tsv.gz"),   "non-PAR")
+  gwas_f <- read_gwas(file.path(in_dir, "GP2_FIGS_EUR_AJ_non_PAR_female_filtered.tsv.gz"), "non-PAR")
+
+} else if (REGION_SET == "PAR") {
+
+  in_dir <- file.path(base_dir, "PAR/MAF_0.01")
+  gwas_m <- rbind(
+    read_gwas(file.path(in_dir, "PAR1/GP2_EUR_AJ_PAR1_male_filtered.tsv.gz"), "PAR1"),
+    read_gwas(file.path(in_dir, "PAR2/GP2_EUR_AJ_PAR2_male_filtered.tsv.gz"), "PAR2")
+  )
+  gwas_f <- rbind(
+    read_gwas(file.path(in_dir, "PAR1/GP2_EUR_AJ_PAR1_female_filtered.tsv.gz"), "PAR1"),
+    read_gwas(file.path(in_dir, "PAR2/GP2_EUR_AJ_PAR2_female_filtered.tsv.gz"), "PAR2")
+  )
+
+} else {
+  stop("REGION_SET must be 'non_PAR' or 'PAR'")
+}
+
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+### --- NEAREST-GENE KEY ---
+### rsID -> nearest gene + previously-identified/novel status, used to label the
+### hits. Edit nearest_genes.csv to add or correct an entry; a hit that is not
+### in the key keeps its rsID and is treated as novel.
+gene_key <- fread(gene_key_file)
+gene_key <- unique(gene_key[, .(SNP, GENE, STATUS)])
+
+### --- PROCESS BOTH GWAS FILES ---
+process_gwas <- function(gwas) {
+  gwas$log10Praw <- -log10(gwas$P)
+  gwas$log10P    <- ifelse(gwas$log10Praw > 40, 40, gwas$log10Praw)
+  gwas$Plevel    <- NA
+  gwas$Plevel[gwas$P < 5E-08] <- "possible"
+  gwas$Plevel[gwas$P < 5E-09] <- "likely"
+  gwas_filtered <- subset(gwas, log10P > log10P_floor)
+  return(gwas_filtered)
+}
+
+gwas_m_filt <- process_gwas(gwas_m)
+gwas_f_filt <- process_gwas(gwas_f)
+
+### --- BUILD THE HITS TABLES ---
+### Genome-wide significant variants taken from summary stats
+### thinned to one lead variant per hit_window so the labels stay readable.
+### GENE and STATUS both come from the nearest-gene key above.
+get_hits <- function(gwas_filt, window = hit_window){
+  sig  <- gwas_filt[gwas_filt$P < 5E-08, ]
+  sig  <- sig[order(sig$P), ]
+  keep <- sig[0, ]
+  for (i in seq_len(nrow(sig))) {
+    if (!any(keep$REGION == sig$REGION[i] & abs(keep$BP - sig$BP[i]) < window)) {
+      keep <- rbind(keep, sig[i, ])
+    }
+  }
+  i    <- match(keep$SNP, gene_key$SNP)
+  gene <- gene_key$GENE[i]
+  stat <- gene_key$STATUS[i]
+  data.table(SNP    = keep$SNP,
+             GENE   = ifelse(is.na(gene), keep$SNP, gene),
+             STATUS = ifelse(is.na(stat), "novel", stat))
+}
+
+hits_male   <- get_hits(gwas_m_filt)
+hits_female <- get_hits(gwas_f_filt)
+
+### Convert both to character vectors
+male_highlight_snps   <- hits_male$SNP
+female_highlight_snps <- hits_female$SNP
+
+### --- CALCULATE SHARED REGION OFFSETS (before filtering) ---
+### Everything sits on chrX, so REGION takes the place of CHR here: this is what
+### lays PAR1 and PAR2 next to each other instead of leaving a 153 Mb gap.
+chr_offsets <- bind_rows(
+  gwas_m %>% select(REGION, BP),
+  gwas_f %>% select(REGION, BP)
+) %>%
+  group_by(REGION) %>%
+  summarize(chr_len = as.numeric(max(BP, na.rm=TRUE) - min(BP, na.rm=TRUE))) %>%
+  arrange(REGION)
+
+### Each region after the first is pushed along by its own width plus x_gap
+x_gap <- x_gap_frac * sum(chr_offsets$chr_len)
+
+chr_offsets <- chr_offsets %>%
+  mutate(tot = lag(cumsum(chr_len + x_gap), default = 0))
+
+### Offsets are relative to the start of each region so the gap before PAR1 and
+### between PAR1 and PAR2 is dropped
+region_starts <- bind_rows(
+  gwas_m %>% select(REGION, BP),
+  gwas_f %>% select(REGION, BP)
+) %>%
+  group_by(REGION) %>%
+  summarize(region_start = as.numeric(min(BP, na.rm=TRUE)))
+
+chr_offsets <- left_join(chr_offsets, region_starts, by="REGION")
+
+### --- MODIFIED prep_plot_data to use shared offsets ---
+prep_plot_data <- function(gwas_filt, hits, chr_offsets){
+
+  g <- merge(gwas_filt, hits, by="SNP", all.x=TRUE)
+  g <- g[order(REGION, BP), ]
+
+  # Use the SHARED region offsets
+  g2 <- g %>%
+    left_join(chr_offsets, by="REGION") %>%
+    mutate(BPcum = as.numeric(BP - region_start + tot)) %>%
+    arrange(REGION, BP) %>%
+    mutate(
+      is_highlight = ifelse(SNP %in% hits$SNP, "yes", "no"),
+      is_annotate  = ifelse(log10P > 7.3, "yes", "no")
+    )
+
+  return(g2)
+}
+
+plot_m <- prep_plot_data(gwas_m_filt, hits_male, chr_offsets)
+plot_f <- prep_plot_data(gwas_f_filt, hits_female, chr_offsets)
+
+### Annotate highlight status separately for males and females
+plot_m$is_highlight_m <- ifelse(plot_m$SNP %in% male_highlight_snps, "yes", "no")
+plot_f$is_highlight_f <- ifelse(plot_f$SNP %in% female_highlight_snps, "yes", "no")
+
+### Label the lead variant of each genome-wide significant locus
+plot_m$is_annotate <- ifelse(plot_m$is_highlight_m=="yes" & plot_m$log10P > 7.3, "yes", "no")
+plot_f$is_annotate <- ifelse(plot_f$is_highlight_f=="yes" & plot_f$log10P > 7.3, "yes", "no")
+
+plot_m$BPcum <- as.numeric(plot_m$BPcum)
+
+axisdf <- bind_rows(
+  plot_m %>% select(REGION, BPcum),
+  plot_f %>% select(REGION, BPcum)
+) %>%
+  group_by(REGION) %>%
+  summarize(center = mean(range(BPcum, na.rm=TRUE))) %>%
+  arrange(REGION)
+
+### --- X AXIS ---
+### Both region sets use real chrX positions in Mb. PAR1 and PAR2 are drawn back
+### to back, so the breaks are built one region at a time: the tick labels simply
+### jump from the end of PAR1 to the start of PAR2.
+make_breaks <- function(chr_offsets, n_total = 10){
+  b <- lapply(seq_len(nrow(chr_offsets)), function(i){
+    r    <- chr_offsets[i, ]
+    n    <- max(2, round(n_total * r$chr_len / sum(chr_offsets$chr_len)))
+    gpos <- pretty(c(r$region_start, r$region_start + r$chr_len), n = n)
+    gpos <- gpos[gpos >= r$region_start & gpos <= r$region_start + r$chr_len]
+    data.frame(pos   = gpos - r$region_start + r$tot,
+               label = as.character(round(gpos / 1e6, 1)))
+  })
+  do.call(rbind, b)
+}
+
+x_breaks <- make_breaks(chr_offsets)
+x_scale  <- scale_x_continuous(breaks = x_breaks$pos, labels = x_breaks$label)
+x_title  <- "Chromosome X position (Mb)"
+
+### PAR1 / PAR2 are marked inside the panel rather than on the axis: a divider
+### where one region ends and the next begins, plus a label over each region
+if (nrow(axisdf) > 1) {
+  region_sep <- list(
+    geom_vline(xintercept = chr_offsets$tot[-1] - x_gap/2, color="black", linewidth=0.3),
+    annotate("text", x = axisdf$center, y = Inf, label = axisdf$REGION,
+             vjust = 1.4, size = 3.5, fontface = "bold")
+  )
+} else {
+  region_sep <- NULL
+}
+
+### --- Y AXIS ---
+### Both halves share one range so the plot is symmetric between the sexes, even
+### when one sex is far more significant than the other. Each half is then
+### shifted by y_gap to open the band between them; the labels undo the shift,
+### so the ticks still read as plain -log10(P) on both sides.
+sig_line <- 7.30103                 ### -log10(5E-08)
+y_max    <- max(c(plot_m$log10P, plot_f$log10P, sig_line), na.rm=TRUE)
+y_gap    <- y_gap_frac * y_max
+
+### Keep gene labels off the significance line: ggrepel is told to place every
+### label box beyond it, on the significant side of its own half.
+label_pad   <- 0.2
+label_floor <- sig_line + y_gap + label_pad
+
+### n sets roughly how many ticks (and so how many gridlines) each half gets
+y_brk <- pretty(c(0, y_max), n = 4)
+y_brk <- y_brk[y_brk > 0 & y_brk <= y_max]
+
+y_scale <- scale_y_continuous(
+  breaks = c(-(rev(y_brk) + y_gap), 0, y_brk + y_gap),
+  labels = c(rev(y_brk), 0, y_brk),
+  limits = c(-(y_max + y_gap), y_max + y_gap),
+  expand = expansion(mult = c(0.05, 0.10))
+)
+
+### --- CREATE MIAMI PLOT ---
+miami <- ggplot() +
+
+  region_sep +
+
+  ### Top: Male GWAS
+  geom_point(data = plot_m,
+             aes(x=BPcum, y=log10P + y_gap, color=as.factor(REGION)),
+             alpha=0.8, size=1.3) +
+
+  ### Bottom: Female GWAS (mirrored)
+  geom_point(data = plot_f,
+             aes(x=BPcum, y=-(log10P + y_gap), color=as.factor(REGION)),
+             alpha=0.8, size=1.3) +
+
+  ### Genome-wide significance (5E-08) on both panels
+  geom_hline(yintercept =  sig_line + y_gap, linetype="dashed", color="black", linewidth=0.3) +
+  geom_hline(yintercept = -(sig_line + y_gap), linetype="dashed", color="black", linewidth=0.3) +
+  geom_hline(yintercept = 0, color="black", linewidth=0.3) +
+
+  ### Highlight male-only loci
+  geom_point(data=subset(plot_m, is_highlight_m=="yes" & Plevel=="likely"),
+             aes(x=BPcum, y=log10P + y_gap), color="red", size=2) +
+  geom_point(data=subset(plot_m, is_highlight_m=="yes" & Plevel=="possible"),
+             aes(x=BPcum, y=log10P + y_gap), color="orange", size=2) +
+
+  ### Highlight female-only loci (mirrored)
+  geom_point(data=subset(plot_f, is_highlight_f=="yes" & Plevel=="likely"),
+             aes(x=BPcum, y=-(log10P + y_gap)), color="red", size=2) +
+  geom_point(data=subset(plot_f, is_highlight_f=="yes" & Plevel=="possible"),
+             aes(x=BPcum, y=-(log10P + y_gap)), color="orange", size=2) +
+
+  ### Variant label annotation—male
+  geom_label_repel(
+    data=subset(plot_m, is_annotate=="yes"),
+    aes(x=BPcum, y=log10P + y_gap, label=GENE, fill=factor(STATUS)),
+    ylim = c(label_floor, Inf),
+    color="black", size=3, max.overlaps=40
+  ) +
+
+  ### Variant label annotation—female
+  geom_label_repel(
+    data=subset(plot_f, is_annotate=="yes"),
+    aes(x=BPcum, y=-(log10P + y_gap), label=GENE, fill=factor(STATUS)),
+    ylim = c(-Inf, -label_floor),
+    color="black", size=3, max.overlaps=40
+  ) +
+
+  ### the 0.5 alpha lives in the fill, so the box stays translucent while the
+  ### label text and border stay solid black
+  scale_fill_manual(values=c("novel"              = alpha("cyan", 0.5),
+                             "previously-identified" = alpha("aquamarine", 0.5))) +
+  scale_color_manual(values = rep(c("darkgrey","lightgrey"), 22)) +
+
+  x_scale +
+  y_scale +
+  ylab("Female -log10(P)   |   Male -log10(P)") +
+  xlab(x_title) +
+  theme_bw() +
+  theme(
+    legend.position="none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_blank()
+  )
+
+print(miami)
+
+### --- SAVE ---
+#ggsave(file.path(out_dir, paste0("MiamiPlot_", REGION_SET, ".pdf")), miami,
+#       width=12, height=6, dpi=300)
+ggsave(file.path(out_dir, paste0("MiamiPlot_", REGION_SET, ".png")), miami,
+       width=12, height=6, dpi=600)
